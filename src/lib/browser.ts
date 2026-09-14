@@ -14,6 +14,36 @@ async function getChromium() {
   return chromiumWithStealth;
 }
 
+// Some environments (locked-down network policies, offline installs) can't
+// reach Playwright's CDN to download the exact Chromium build a given
+// Playwright version expects. If that build isn't present on disk, fall back
+// to another Chromium binary already available on the machine instead of
+// failing outright. Override the fallback path with PLAYWRIGHT_CHROMIUM_EXECUTABLE
+// if your environment keeps it somewhere else.
+const FALLBACK_CHROMIUM_EXECUTABLE =
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ||
+  '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resolveExecutablePath(chromium: any): string | undefined {
+  try {
+    const expected = chromium.executablePath();
+    if (expected && fs.existsSync(expected)) {
+      // The Playwright-managed build is present — use the default resolution.
+      return undefined;
+    }
+  } catch {
+    // executablePath() can throw if Playwright has no idea where to look;
+    // fall through to the fallback below.
+  }
+  if (fs.existsSync(FALLBACK_CHROMIUM_EXECUTABLE)) {
+    return FALLBACK_CHROMIUM_EXECUTABLE;
+  }
+  // Neither the expected build nor the fallback exists — let Playwright
+  // throw its normal "browser not found" error with install instructions.
+  return undefined;
+}
+
 const PROFILE_DIR = path.join(process.cwd(), 'data', 'browser-profile');
 
 // Every browser we launch is tracked here so we can guarantee teardown — both
@@ -52,8 +82,10 @@ export async function launchBrowser(headless = true) {
   }
   ensureShutdownHook();
   const chromium = await getChromium();
+  const executablePath = resolveExecutablePath(chromium);
   const browser = await chromium.launch({
     headless,
+    ...(executablePath ? { executablePath } : {}),
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
